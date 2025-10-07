@@ -11,36 +11,49 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout your GitHub code
+      # Step 1: Checkout your GitHub code (Needed if you want to inspect files on the runner, but not strictly needed if EC2 pulls the code)
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # Step 2: Setup Node.js
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '20'  # use your Node version
-
-      # Step 3: Install dependencies
-      - name: Install Dependencies
-        run: npm ci
-
-      # Step 4: Build Next.js
-      - name: Build Next.js Project
-        run: npm run build
+      # Steps 2, 3, 4 are for building on the GitHub runner.
+      # If you want to build on the EC2 instance (which is what your EC2 script is trying to do), these steps are redundant or could be removed
+      # if you're not using the artifacts from the build.
 
       # Step 5: Deploy to EC2 via SSH
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v0.1.8
         with:
-          host: 54.91.79.24                   # your EC2 IP
-          username: ubuntu                     # your EC2 username
-          key: ${{ secrets.PRIVATE_KEY }}     # private key stored in GitHub secrets
+          host: 54.91.79.24                 # your EC2 IP
+          username: ubuntu                   # your EC2 username
+          key: ${{ secrets.PRIVATE_KEY }}    # private key stored in GitHub secrets
           port: 22
           script: |
-            cd learncicd         # your project folder on EC2
+            # 1. Source nvm (Node Version Manager) to make node/npm/pm2 available.
+            #    Adjust path if nvm is installed elsewhere (e.g., ~/.nvm/nvm.sh).
+            #    If you installed node globally (not with nvm), this line is unnecessary,
+            #    but you must ensure /usr/bin/npm and /usr/bin/pm2 are in the PATH.
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" 
+            
+            # 2. Check if the project folder exists and navigate to it
+            cd learncicd                      # your project folder on EC2
+            
+            # 3. Pull the latest code
             git pull origin main
-            npm ci
-            npm run build
-            pm2 start npm --name "nextjs-app" -- run start -- -p 3000
-
+            
+            # 4. Install dependencies (if lock file changed) and build
+            npm ci                            # Install dependencies
+            npm run build                     # Build Next.js
+            
+            # 5. Restart or start the PM2 process
+            #    Restart PM2 process if it exists, otherwise start a new one.
+            pm2 describe nextjs-app > /dev/null
+            RUNNING=$?
+            
+            if [ "$RUNNING" -ne 0 ]; then
+                # Start the app if it's not running
+                pm2 start npm --name "cicdtest" -- run start -- -p 3000
+            else
+                # Reload/restart the app if it is running
+                pm2 reload nextjs-app
+            fi
